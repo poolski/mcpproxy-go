@@ -602,6 +602,12 @@ func (r *Runtime) refreshHeldContractSnapshot(serverName, toolName string, exist
 // scan). Sourced from the lock-free StateView snapshot; returns nil when no
 // supervisor/snapshot is available (best effort — a genuinely single-server
 // deployment has no peers to shadow anyway).
+//
+// The projection of a snapshot is computed once and reused until the
+// StateView publishes a new one: a discovery pass scans its changed tools one
+// at a time, and re-projecting (and re-marshaling every schema of) every
+// connected server per tool made a large change cost O(tools x peers). The
+// returned map and its slices are shared and must not be modified.
 func (r *Runtime) collectPeerToolMetadata(serverName string) map[string][]*config.ToolMetadata {
 	if r.supervisor == nil {
 		return nil
@@ -610,9 +616,36 @@ func (r *Runtime) collectPeerToolMetadata(serverName string) map[string][]*confi
 	if snapshot == nil {
 		return nil
 	}
-	peers := make(map[string][]*config.ToolMetadata)
+	all := r.peerToolProjection(snapshot)
+	peers := make(map[string][]*config.ToolMetadata, len(all))
+	for name, metas := range all {
+		if name != serverName {
+			peers[name] = metas
+		}
+	}
+	if len(peers) == 0 {
+		return nil
+	}
+	return peers
+}
+
+// peerToolCache is the projection of one immutable StateView snapshot.
+type peerToolCache struct {
+	snapshot *stateview.ServerStatusSnapshot
+	servers  map[string][]*config.ToolMetadata
+}
+
+// peerToolProjection returns every server's tools in snapshot as
+// config.ToolMetadata, reusing the cached projection when snapshot is the one
+// it was computed from. Snapshots are immutable, so the pointer identifies the
+// content.
+func (r *Runtime) peerToolProjection(snapshot *stateview.ServerStatusSnapshot) map[string][]*config.ToolMetadata {
+	if c := r.peerTools.Load(); c != nil && c.snapshot == snapshot {
+		return c.servers
+	}
+	servers := make(map[string][]*config.ToolMetadata, len(snapshot.Servers))
 	for name, status := range snapshot.Servers {
-		if name == serverName || status == nil {
+		if status == nil {
 			continue
 		}
 		metas := make([]*config.ToolMetadata, 0, len(status.Tools))
@@ -634,13 +667,11 @@ func (r *Runtime) collectPeerToolMetadata(serverName string) map[string][]*confi
 			})
 		}
 		if len(metas) > 0 {
-			peers[name] = metas
+			servers[name] = metas
 		}
 	}
-	if len(peers) == 0 {
-		return nil
-	}
-	return peers
+	r.peerTools.Store(&peerToolCache{snapshot: snapshot, servers: servers})
+	return servers
 }
 
 // ToolApprovalResult contains the result of checking tool approvals for a server.

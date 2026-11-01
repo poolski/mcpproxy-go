@@ -10,7 +10,7 @@ import (
 	"github.com/smart-mcp-proxy/mcpproxy-go/internal/config"
 )
 
-func newTestRuntime(t *testing.T) *Runtime {
+func newTestRuntime(t testing.TB) *Runtime {
 	t.Helper()
 
 	tempDir := t.TempDir()

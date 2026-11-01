@@ -313,6 +313,9 @@ type Runtime struct {
 	// unit for readers: a capture holds the write lock for all of it, a review
 	// holds the read lock while it reads records and live state.
 	captureSnapMu sync.RWMutex
+	// peerTools caches the scan gate's projection of the latest StateView
+	// snapshot (see peerToolProjection).
+	peerTools atomic.Pointer[peerToolCache]
 	// reviewAfterRecords is a test hook run after GetServerReview lists records.
 	reviewAfterRecords func()
 	// captureAfterPrune is a test hook run after a capture persisted and
