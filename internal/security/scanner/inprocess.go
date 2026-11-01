@@ -66,40 +66,25 @@ func ScanToolMetadataVerdict(serverName string, tools []*config.ToolMetadata, pe
 		if t == nil {
 			continue
 		}
-		views = append(views, toolView(serverName, toolDef{
-			Name:         t.Name,
-			Description:  t.Description,
-			InputSchema:  json.RawMessage(t.ParamsJSON),
-			OutputSchema: json.RawMessage(t.OutputSchemaJSON),
-		}))
+		views = append(views, metadataView(serverName, t))
 	}
 	if len(views) == 0 {
 		// Nothing to scan — fail closed (absent verdict, FR-014).
 		return "clean", nil, false
 	}
 
-	// Append every peer server's tools (tagged with their TRUE owning server) so
-	// the cross-server shadowing/impersonation checks can fire. Deterministic peer
-	// ordering keeps findings stable across runs. Peer findings are filtered out
-	// below (only serverName's findings are reported), so peers are pure context.
-	peerNames := make([]string, 0, len(peerTools))
-	for name := range peerTools {
-		if name != serverName {
-			peerNames = append(peerNames, name)
-		}
-	}
-	sort.Strings(peerNames)
-	for _, name := range peerNames {
+	// Every peer server's tools (tagged with their TRUE owning server) are
+	// indexed so the cross-server shadowing/impersonation checks can fire, but
+	// only serverName's tools are inspected: peers are pure context, and
+	// inspecting them made one changed tool cost a scan of every connected
+	// server. Deterministic peer ordering keeps findings stable across runs.
+	var peerViews []detect.ToolView
+	for _, name := range sortedPeerNames(peerTools, serverName) {
 		for _, t := range peerTools[name] {
 			if t == nil {
 				continue
 			}
-			views = append(views, toolView(name, toolDef{
-				Name:         t.Name,
-				Description:  t.Description,
-				InputSchema:  json.RawMessage(t.ParamsJSON),
-				OutputSchema: json.RawMessage(t.OutputSchemaJSON),
-			}))
+			peerViews = append(peerViews, metadataView(name, t))
 		}
 	}
 
@@ -119,7 +104,7 @@ func ScanToolMetadataVerdict(serverName string, tools []*config.ToolMetadata, pe
 		ScannerID: inProcessTPAScannerID,
 		Checks:    engineChecks,
 	})
-	result := engine.Scan(detect.NewRegistryView(views))
+	result := engine.Scan(detect.NewRegistryViewWithPeers(views, peerViews))
 
 	prefix := serverName + ":"
 	out := make([]ScanFinding, 0, len(result.Findings))
@@ -206,17 +191,12 @@ func detectEngineFindings(tools []toolDef, serverName string, peerTools map[stri
 	for _, t := range tools {
 		views = append(views, toolView(serverName, t))
 	}
-	// Deterministic peer ordering keeps findings stable across runs.
-	peerNames := make([]string, 0, len(peerTools))
-	for name := range peerTools {
-		if name != serverName {
-			peerNames = append(peerNames, name)
-		}
-	}
-	sort.Strings(peerNames)
-	for _, name := range peerNames {
+	// Peers are indexed as context only, never inspected (see
+	// ScanToolMetadataVerdict). Deterministic ordering keeps findings stable.
+	var peerViews []detect.ToolView
+	for _, name := range sortedPeerNames(peerTools, serverName) {
 		for _, t := range peerTools[name] {
-			views = append(views, toolView(name, t))
+			peerViews = append(peerViews, toolView(name, t))
 		}
 	}
 
@@ -234,7 +214,7 @@ func detectEngineFindings(tools []toolDef, serverName string, peerTools map[stri
 		ScannerID: scannerID,
 		Checks:    engineChecks,
 	})
-	result := engine.Scan(detect.NewRegistryView(views))
+	result := engine.Scan(detect.NewRegistryViewWithPeers(views, peerViews))
 
 	prefix := serverName + ":"
 	out := make([]ScanFinding, 0, len(result.Findings))
@@ -258,6 +238,30 @@ func toolView(server string, t toolDef) detect.ToolView {
 		InputSchema:  t.InputSchema,
 		OutputSchema: t.OutputSchema,
 	}
+}
+
+// metadataView projects a tool's metadata onto a detect.ToolView tagged with
+// its owning server.
+func metadataView(server string, t *config.ToolMetadata) detect.ToolView {
+	return toolView(server, toolDef{
+		Name:         t.Name,
+		Description:  t.Description,
+		InputSchema:  json.RawMessage(t.ParamsJSON),
+		OutputSchema: json.RawMessage(t.OutputSchemaJSON),
+	})
+}
+
+// sortedPeerNames returns the peer servers other than serverName in a
+// deterministic order.
+func sortedPeerNames[T any](peers map[string][]T, serverName string) []string {
+	names := make([]string, 0, len(peers))
+	for name := range peers {
+		if name != serverName {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
 }
 
 // peerToolDefs converts the cross-server snapshot carried on a ScanRequest

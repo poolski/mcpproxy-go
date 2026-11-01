@@ -121,6 +121,21 @@ func NewRegistryView(tools []ToolView) RegistryView {
 	return RegistryView{Tools: out, ToolsByName: byName, ToolNames: names}
 }
 
+// NewRegistryViewWithPeers is NewRegistryView for a scan of targets alone:
+// only targets are in Tools, so the engine inspects (and normalizes) only them,
+// while peers are indexed in ToolsByName and ToolNames as cross-server context
+// for the shadowing check. A target's findings are the same as in a scan of
+// NewRegistryView(targets+peers); the peers' own findings, which a caller
+// scanning one server discards, are never computed.
+func NewRegistryViewWithPeers(targets, peers []ToolView) RegistryView {
+	reg := NewRegistryView(targets)
+	for _, tv := range peers {
+		reg.ToolsByName[tv.Name] = append(reg.ToolsByName[tv.Name], tv)
+		reg.ToolNames[tv.Name] = struct{}{}
+	}
+	return reg
+}
+
 // combinedText concatenates the description with the raw schema text so the
 // soft checks see parameter names/descriptions too.
 func combinedText(tv ToolView) string {
